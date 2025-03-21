@@ -1,5 +1,6 @@
 flask
-gunicorn
-openai
+flask_sqlalchemy
+flask_jwt_extended
 stripe
-flask-babel
+openai
+gunicorn
