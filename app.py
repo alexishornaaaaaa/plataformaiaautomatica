@@ -72,5 +72,10 @@ def procesar_pago(email, monto):
         usuario = cursor.fetchone()
         if usuario:
             charge = stripe.Charge.create(
-                amount=int(monto * 100),
+    amount=int(monto * 100),
+    currency="usd",
+    source="tok_visa",
+    description=f"Pago de {email} por ${monto}"
+)
+
          
