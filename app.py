@@ -1,109 +1,190 @@
-import os
-import logging
-import sqlite3
-import stripe
-import openai
-from flask import Flask, request, jsonify, render_template
-from flask_babel import Babel, _
+plataformaiaautomatica/
+│
+├── app.py
+├── templates/
+│   ├── index.html
+│   ├── register.html
+│   ├── login.html
+│   ├── dashboard.html
+│   ├── payment.html
+│   └── ... (otros templates)
+├── static/
+│   └── ... (archivos estáticos como CSS, JS)
+├── models/
+│   ├── __init__.py
+│   └── ... (otros modelos)
+├── routes/
+│   ├── __init__.py
+│   ├── auth.py
+│   ├── main.py
+│   └── ... (otras rutas)
+├── utils/
+│   ├── __init__.py
+│   └── ... (otros utilitarios)
+└── ... (otros archivos y carpetas)
+    from flask import Flask
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager
 
-# Configuración de Flask
-app = Flask(__name__, template_folder="templates", static_folder="static")
-app.config['BABEL_DEFAULT_LOCALE'] = 'es'
-babel = Babel(app)
+app = Flask(__name__)
+app.config['SECRET_KEY'] = 'your_secret_key'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///site.db'
+db = SQLAlchemy(app)
+login_manager = LoginManager(app)
+login_manager.login_view = 'login'
 
-# Configuración segura de las API Keys
-stripe.api_key = os.getenv("STRIPE_API_KEY", "tu_api_key_de_stripe")
-openai.api_key = os.getenv("OPENAI_API_KEY", "tu_api_key_de_openai")
-
-# Configuración de logging
-def configurar_logger():
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-configurar_logger()
-
-# Generación de contenido con OpenAI
-def generar_contenido(prompt, modelo="gpt-4"):
-    try:
-        respuesta = openai.ChatCompletion.create(
-            model=modelo,
-            messages=[
-                {"role": "system", "content": "Eres un asistente de IA experto en negocios."},
-                {"role": "user", "content": prompt}
-            ]
-        )
-        return respuesta["choices"][0]["message"]["content"]
-    except Exception as e:
-        logging.error(f"Error generando contenido: {str(e)}")
-        return None
-
-# Inicializar base de datos SQLite
-def inicializar_bd():
-    try:
-        conexion = sqlite3.connect("usuarios.db")
-        cursor = conexion.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS usuarios (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nombre TEXT,
-                email TEXT UNIQUE
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS pagos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                usuario_id INTEGER,
-                monto REAL,
-                status TEXT,
-                FOREIGN KEY(usuario_id) REFERENCES usuarios(id)
-            )
-        """)
-        conexion.commit()
-    except Exception as e:
-        logging.error(f"Error inicializando BD: {str(e)}")
-    finally:
-        if conexion:
-            conexion.close()
-
-# Registrar usuario en la base de datos
-def registrar_usuario(nombre, email):
-    try:
-        conexion = sqlite3.connect("usuarios.db")
-        cursor = conexion.cursor()
-        cursor.execute("INSERT INTO usuarios (nombre, email) VALUES (?, ?)", (nombre, email))
-        conexion.commit()
-        return {"status": "success", "message": "Usuario registrado correctamente"}
-    except Exception as e:
-        logging.error(f"Error registrando usuario: {str(e)}")
-        return {"status": "error", "message": str(e)}
-    finally:
-        if conexion:
-            conexion.close()
-
-# Procesar pago con Stripe
-def procesar_pago(email, monto):
-    try:
-        conexion = sqlite3.connect("usuarios.db")
-        cursor = conexion.cursor()
-        cursor.execute("SELECT id FROM usuarios WHERE email = ?", (email,))
-        usuario = cursor.fetchone()
-        if usuario:
-            charge = stripe.Charge.create(
-                amount=int(monto * 100),
-                currency="usd",
-                description=f"Pago de {email}",
-                source="tok_visa"
-            )
-            cursor.execute("INSERT INTO pagos (usuario_id, monto, status) VALUES (?, ?, ?)", (usuario[0], monto, charge.status))
-            conexion.commit()
-            return {"status": "success", "message": "Pago procesado correctamente"}
-        else:
-            return {"status": "error", "message": "Usuario no encontrado"}
-    except Exception as e:
-        logging.error(f"Error procesando pago: {str(e)}")
-        return {"status": "error", "message": str(e)}
-    finally:
-        if conexion:
-            conexion.close()
+from routes import main, auth
+app.register_blueprint(main)
+app.register_blueprint(auth)
 
 if __name__ == "__main__":
-    inicializar_bd()
+    db.create_all()
     app.run(debug=True)
+    from flask import Blueprint, render_template
+
+main = Blueprint('main', __name__)
+
+@main.route('/')
+def index():
+    return render_template('index.html')
+
+@main.route('/dashboard')
+def dashboard():
+    return render_template('dashboard.html')
+    from flask import Blueprint, render_template, redirect, url_for, flash, request
+from flask_login import login_user, current_user, logout_user, login_required
+from models import User
+from werkzeug.security import generate_password_hash, check_password_hash
+
+auth = Blueprint('auth', __name__)
+
+@auth.route('/login', methods=['GET', 'POST'])
+def login():
+    if current_user.is_authenticated:
+        return redirect(url_for('main.dashboard'))
+    if request.method == 'POST':
+        email = request.form['email']
+        password = request.form['password']
+        user = User.query.filter_by(email=email).first()
+        if user and check_password_hash(user.password, password):
+            login_user(user)
+            return redirect(url_for('main.dashboard'))
+        else:
+            flash('Login Failed. Check your email and password')
+    return render_template('login.html')
+
+@auth.route('/register', methods=['GET', 'POST'])
+def register():
+    if current_user.is_authenticated:
+        return redirect(url_for('main.dashboard'))
+    if request.method == 'POST':
+        username = request.form['username']
+        email = request.form['email']
+        password = request.form['password']
+        hashed_password = generate_password_hash(password)
+        user = User(username=username, email=email, password=hashed_password)
+        db.session.add(user)
+        db.session.commit()
+        login_user(user)
+        return redirect(url_for('main.dashboard'))
+    return render_template('register.html')
+
+@auth.route('/logout')
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for('main.index'))
+    <!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Inicio</title>
+</head>
+<body>
+    <h1>Bienvenido a la Plataforma de IA Automática</h1>
+    <a href="{{ url_for('auth.login') }}">Login</a> | 
+    <a href="{{ url_for('auth.register') }}">Registrar Usuario</a>
+</body>
+</html>
+           <!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Registro</title>
+</head>
+<body>
+    <h1>Registro de Usuario</h1>
+    <form action="{{ url_for('auth.register') }}" method="post">
+        <label for="username">Nombre de Usuario:</label>
+        <input type="text" id="username" name="username" required>
+        <br>
+        <label for="email">Email:</label>
+        <input type="email" id="email" name="email" required>
+        <br>
+        <label for="password">Contraseña:</label>
+        <input type="password" id="password" name="password" required>
+        <br>
+        <button type="submit">Registrar</button>
+    </form>
+</body>
+</html>
+    <!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Login</title>
+</head>
+<body>
+    <h1>Login de Usuario</h1>
+    <form action="{{ url_for('auth.login') }}" method="post">
+        <label for="email">Email:</label>
+        <input type="email" id="email" name="email" required>
+        <br>
+        <label for="password">Contraseña:</label>
+        <input type="password" id="password" name="password" required>
+        <br>
+        <button type="submit">Login</button>
+    </form>
+</body>
+</html>
+from app import db, login_manager
+from flask_login import UserMixin
+
+class User(db.Model, UserMixin):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(150), nullable=False, unique=True)
+    email = db.Column(db.String(150), nullable=False, unique=True)
+    password = db.Column(db.String(150), nullable=False)
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
+    import unittest
+from app import app, db
+from models import User
+
+class BasicTests(unittest.TestCase):
+
+    def setUp(self):
+        app.config['TESTING'] = True
+        app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
+        self.app = app.test_client()
+        db.create_all()
+
+    def tearDown(self):
+        db.session.remove()
+        db.drop_all()
+
+    def test_register_user(self):
+        response = self.app.post('/register', data=dict(username='testuser', email='test@example.com', password='password'), follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+
+    def test_login_user(self):
+        user = User(username='testuser', email='test@example.com', password='password')
+        db.session.add(user)
+        db.session.commit()
+        response = self.app.post('/login', data=dict(email='test@example.com', password='password'), follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+
+if __name__ == "__main__":
+    unittest.main()
